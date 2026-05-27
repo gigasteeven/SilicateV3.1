@@ -71,7 +71,7 @@ add_library(${PROJECT_NAME} SHARED
 if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE /W4)
 else()
-    target_compile_options(${PROJECT_NAME} PRIVATE -Wall)
+    target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wno-dollar-in-identifier-extension)
 endif()
 target_include_directories(${PROJECT_NAME} PRIVATE src include)
 
