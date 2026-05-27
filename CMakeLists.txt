@@ -83,7 +83,7 @@ endif()
 
 add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
 
-add_subdirectory(lib/tabby)
+CPMAddPackage("gh:silicate-bot/tabby#main")
 set(TABBY_USE_WIN32 ON)
 set(TABBY_USE_OPENGL3 ON)
 add_compile_definitions(TABBY_USE_WIN32)
