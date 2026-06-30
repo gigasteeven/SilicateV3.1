@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "evomap-claude-opus-4-7",
+  "provider": {
+    "openai": {
+      "options": {
+        "baseURL": "https://api.evomap.ai/v1",
+        "apiKey": "sk-evomap-b7nxs1l4zgxreayk66a86b465a9947a2bada1ab049281752а"
+      }
+    }
+  },
+  "permission": {
+    "edit": "ask",
+    "bash": "ask"
+  }
+}
