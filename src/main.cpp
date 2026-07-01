@@ -1,11 +1,17 @@
 /// ═══════════════════════════════════════════════════════════════════════════
 /// Trakines — Main entry point
-/// All Geode hooks: PlayLayer, CCDirector, LevelTools, Keyboard
 ///
-/// Architecture:
-///   1. Layout mode applied via addObject hook (from XDBot)
-///   2. Each frame: restore originals → render to FBO (Spout2) → reapply layout
-///   3. Menu/pause/editor: Spout2 mirrors screen 1:1
+/// Player screen  : XDBot-style layout mode (deco hidden, white silhouettes,
+///                  authentic blue BG/ground/line via GD color channels).
+/// OBS via Spout2 : full original decor for the level + all UI/indicators.
+///
+/// Rendering:
+///   • Spout ON  → dual render. Each frame: restore full decor + original
+///                 colors → render offscreen (sent to OBS) → re-apply layout
+///                 (shown to the player).
+///   • Spout OFF → single render of the layout (no FPS cost).
+///   • Menu/pause/editor → single render, framebuffer mirrored 1:1 to OBS so
+///                 every indicator / menu / the editor stays intact on stream.
 /// ═══════════════════════════════════════════════════════════════════════════
 
 #include <Geode/Geode.hpp>
@@ -13,6 +19,8 @@
 #include <Geode/modify/LevelTools.hpp>
 #include <Geode/modify/CCDirector.hpp>
 #include <Geode/modify/CCKeyboardDispatcher.hpp>
+#include <Geode/binding/GJEffectManager.hpp>
+#include <Geode/binding/ColorAction.hpp>
 
 #include "global.hpp"
 #include "layout_mode.hpp"
@@ -20,38 +28,95 @@
 
 using namespace geode::prelude;
 
-// ─── Statics ────────────────────────────────────────────────────────────────
-
-/// Per-object snapshot: stores original visual properties so we can restore
-/// them for the Spout2 full-decor render pass and reapply layout after.
+// ─── Per-object snapshot (original visuals, used to restore full decor) ───────
 struct ObjectSnapshot {
-    GameObject* obj         = nullptr;
-    int  mainColorID        = 0;
-    int  detailColorID      = 0;
-    bool detailUsesHSV      = false;
-    bool baseUsesHSV        = false;
-    bool hasNoGlow          = false;
-    bool isHide             = false;
-    GLubyte opacity         = 255;
-    bool visible            = true;
-    bool isDeco             = false;   // true if objectID ∈ decoObjectIDs
-    bool isExcludedTrigger  = false;   // true if objectID ∈ excludedTriggerIDs
+    GameObject* obj      = nullptr;
+    int  mainColorID     = 0;
+    int  detailColorID   = 0;
+    bool detailUsesHSV   = false;
+    bool baseUsesHSV     = false;
+    bool hasNoGlow       = false;
+    bool isHide          = false;
+    GLubyte opacity      = 255;
+    bool visible         = true;
+    bool hide            = false;   // hidden in layout (deco / excluded trigger)
 };
 
-static std::vector<ObjectSnapshot>  s_snapshots;
-static TrakinesSpout                s_spout;
-static cocos2d::CCRenderTexture*    s_renderTex      = nullptr;
-static unsigned int                 s_lastTexWidth   = 0;
-static unsigned int                 s_lastTexHeight  = 0;
+// ─── Original color-channel snapshot (to restore full-decor colors for OBS) ───
+struct ColorSnapshot {
+    int id = 0;
+    ccColor3B color   = {255, 255, 255};
+    ccColor3B from    = {255, 255, 255};
+    ccColor3B to      = {255, 255, 255};
+    bool blending     = false;
+};
 
-// Layout mode background overlay (blue)
-static cocos2d::CCLayerColor*       s_blueBG         = nullptr;
-static constexpr int                BLUE_BG_TAG      = 0x54524B; // "TRK"
+static std::vector<ObjectSnapshot> s_snapshots;
+static std::vector<ColorSnapshot>  s_colorSnapshots;
+static TrakinesSpout               s_spout;
+static cocos2d::CCRenderTexture*   s_renderTex     = nullptr;
+static unsigned int                s_lastTexWidth  = 0;
+static unsigned int                s_lastTexHeight = 0;
 
-// ─── Helpers: restore / apply ───────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// Color-channel helpers (authentic XDBot blue via GJEffectManager)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Snapshot the current colors of every layout channel so we can restore the
+/// real decor colors for the OBS render pass.
+static void snapshotLevelColors(PlayLayer* pl) {
+    s_colorSnapshots.clear();
+    if (!pl || !pl->m_effectManager) return;
+
+    for (const auto& ch : layoutColorChannels) {
+        ColorAction* action = pl->m_effectManager->getColorAction(ch.id);
+        if (!action) continue;
+        ColorSnapshot snap;
+        snap.id       = ch.id;
+        snap.color    = action->m_color;
+        snap.from     = action->m_fromColor;
+        snap.to       = action->m_toColor;
+        snap.blending = action->m_blending;
+        s_colorSnapshots.push_back(snap);
+    }
+}
+
+/// Force the layout channels to XDBot's blue/white palette.
+static void applyLayoutColors(PlayLayer* pl) {
+    if (!pl || !pl->m_effectManager) return;
+
+    for (const auto& ch : layoutColorChannels) {
+        ColorAction* action = pl->m_effectManager->getColorAction(ch.id);
+        if (!action) continue;
+        ccColor3B col = ccc3(ch.r, ch.g, ch.b);
+        action->m_color     = col;
+        action->m_fromColor = col;
+        action->m_toColor   = col;
+        action->m_blending  = ch.blending;
+    }
+    pl->m_effectManager->calculateBaseActiveColors();
+}
+
+/// Restore the level's original color channels (used for the OBS render pass).
+static void restoreLevelColors(PlayLayer* pl) {
+    if (!pl || !pl->m_effectManager) return;
+
+    for (const auto& snap : s_colorSnapshots) {
+        ColorAction* action = pl->m_effectManager->getColorAction(snap.id);
+        if (!action) continue;
+        action->m_color     = snap.color;
+        action->m_fromColor = snap.from;
+        action->m_toColor   = snap.to;
+        action->m_blending  = snap.blending;
+    }
+    pl->m_effectManager->calculateBaseActiveColors();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Object visual helpers
+// ═══════════════════════════════════════════════════════════════════════════
 
 /// Restore every tracked object to its original (full-decor) state.
-/// Called BEFORE the Spout2 render pass.
 static void restoreFullDecor() {
     for (auto& s : s_snapshots) {
         if (!s.obj) continue;
@@ -60,53 +125,48 @@ static void restoreFullDecor() {
         s.obj->m_detailUsesHSV       = s.detailUsesHSV;
         s.obj->m_baseUsesHSV         = s.baseUsesHSV;
         s.obj->m_hasNoGlow           = s.hasNoGlow;
+        s.obj->m_isHide              = s.isHide;
         s.obj->setOpacity(s.opacity);
         s.obj->setVisible(s.visible);
-        // NOTE: m_isHide is NOT toggled per-frame (it affects gameplay collision)
     }
-    // Hide the blue overlay so Spout2 sees the real background
-    if (s_blueBG) s_blueBG->setVisible(false);
 }
 
-/// Apply layout mode visuals: white silhouettes, hide deco, show blue BG.
-/// Called AFTER the Spout2 render pass (this is what the player sees).
+/// Apply the XDBot layout look: deco/excluded hidden, everything else a clean
+/// white silhouette (matches XDBot's deco-removal result visually).
 static void applyLayoutMode() {
     for (auto& s : s_snapshots) {
         if (!s.obj) continue;
 
-        // Decoration objects and excluded triggers → hide completely
-        if (s.isDeco || s.isExcludedTrigger) {
+        // Decoration + excluded triggers: hidden (mimics XDBot's deletion).
+        if (s.hide) {
             s.obj->setVisible(false);
             continue;
         }
 
-        // Gameplay objects → white, no glow, no HSV
+        // Object 2065 (area-color visual) — invisible, marked hidden (XDBot).
+        bool is2065 = (s.obj->m_objectID == 2065);
+
+        // Gameplay/solid objects → white silhouette, no glow, no HSV (XDBot).
         s.obj->m_activeMainColorID   = -1;
         s.obj->m_activeDetailColorID = -1;
         s.obj->m_detailUsesHSV       = false;
         s.obj->m_baseUsesHSV         = false;
         s.obj->m_hasNoGlow           = true;
-
-        // Object 2065 (area trigger visual) should be invisible
-        bool isAreaTrigger = (s.obj->m_objectID == 2065);
-        s.obj->setOpacity(isAreaTrigger ? 0 : 255);
-        s.obj->setVisible(!isAreaTrigger);
+        s.obj->m_isHide              = is2065;
+        s.obj->setOpacity(is2065 ? 0 : 255);
+        s.obj->setVisible(!is2065);
     }
-    // Show blue background overlay for layout mode
-    if (s_blueBG) s_blueBG->setVisible(true);
 }
 
-/// Ensure the CCRenderTexture matches the current window size (handles resize).
+/// Ensure the offscreen render texture matches the current window size.
 static void ensureRenderTexture(unsigned int w, unsigned int h) {
     if (s_renderTex && s_lastTexWidth == w && s_lastTexHeight == h) return;
 
-    // Release old texture
     if (s_renderTex) {
         s_renderTex->release();
         s_renderTex = nullptr;
     }
 
-    // CCRenderTexture::create takes points; content scale factor handles pixels
     auto winSize = CCDirector::sharedDirector()->getWinSize();
     s_renderTex = CCRenderTexture::create(
         static_cast<int>(winSize.width),
@@ -121,7 +181,7 @@ static void ensureRenderTexture(unsigned int w, unsigned int h) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Hook: LevelTools — bypass integrity check when layout mode modifies data
+// Hook: LevelTools — bypass integrity check while layout mode is on (XDBot)
 // ═══════════════════════════════════════════════════════════════════════════
 class $modify(LevelTools) {
     static bool verifyLevelIntegrity(gd::string levelString, int levelID) {
@@ -138,36 +198,25 @@ class $modify(TrakinesPlayLayer, PlayLayer) {
     bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
         auto& g = TrakinesGlobal::get();
 
-        // Read settings
         g.layoutMode   = Mod::get()->getSavedValue<bool>("layout_mode", true);
         g.spoutEnabled = Mod::get()->getSavedValue<bool>("spout_enabled", true);
 
-        // Clear previous level's object data
         s_snapshots.clear();
-        s_blueBG = nullptr;
+        s_colorSnapshots.clear();
 
-        // Call original init (this triggers addObject for every level object)
+        // Original init triggers addObject for every level object.
         if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
 
         g.inPlayLayer = true;
         g.playLayer   = this;
 
         if (g.layoutMode) {
-            // Create blue background overlay (RGB 40, 125, 255)
-            auto winSize = CCDirector::sharedDirector()->getWinSize();
-            s_blueBG = CCLayerColor::create(ccc4(40, 125, 255, 255));
-            if (s_blueBG) {
-                s_blueBG->setContentSize(winSize);
-                s_blueBG->setZOrder(-9999);     // behind everything in the game
-                s_blueBG->setTag(BLUE_BG_TAG);
-                this->addChild(s_blueBG);
-            }
-
-            // Apply layout mode visuals to all objects stored during addObject
+            // Snapshot the real colors first, then paint the layout palette.
+            snapshotLevelColors(this);
             applyLayoutMode();
+            applyLayoutColors(this);
         }
 
-        // Initialize Spout2 sender
         if (g.spoutEnabled) {
             auto pixelSize = CCDirector::sharedDirector()->getWinSizeInPixels();
             unsigned int w = static_cast<unsigned int>(pixelSize.width);
@@ -180,30 +229,27 @@ class $modify(TrakinesPlayLayer, PlayLayer) {
     }
 
     void addObject(GameObject* obj) {
-        // ALWAYS add the object (even deco — we need it for Spout2 full render)
+        // ALWAYS add the object — even deco — so the OBS pass can render it.
         PlayLayer::addObject(obj);
 
         auto& g = TrakinesGlobal::get();
         if (!g.layoutMode) return;
 
-        // Snapshot original properties BEFORE any layout modifications
         ObjectSnapshot snap;
-        snap.obj              = obj;
-        snap.mainColorID      = obj->m_activeMainColorID;
-        snap.detailColorID    = obj->m_activeDetailColorID;
-        snap.detailUsesHSV    = obj->m_detailUsesHSV;
-        snap.baseUsesHSV      = obj->m_baseUsesHSV;
-        snap.hasNoGlow        = obj->m_hasNoGlow;
-        snap.isHide           = obj->m_isHide;
-        snap.opacity          = obj->getOpacity();
-        snap.visible          = obj->isVisible();
-        snap.isDeco           = decoObjectIDs.contains(obj->m_objectID);
-        snap.isExcludedTrigger = excludedTriggerIDs.contains(obj->m_objectID);
+        snap.obj           = obj;
+        snap.mainColorID   = obj->m_activeMainColorID;
+        snap.detailColorID = obj->m_activeDetailColorID;
+        snap.detailUsesHSV = obj->m_detailUsesHSV;
+        snap.baseUsesHSV   = obj->m_baseUsesHSV;
+        snap.hasNoGlow     = obj->m_hasNoGlow;
+        snap.isHide        = obj->m_isHide;
+        snap.opacity       = obj->getOpacity();
+        snap.visible       = obj->isVisible();
+        // Hidden in layout view: decorations and excluded triggers.
+        snap.hide          = decoObjectIDs.contains(obj->m_objectID)
+                          || excludedTriggerIDs.contains(obj->m_objectID);
 
         s_snapshots.push_back(snap);
-
-        // Layout mode modifications are applied in bulk after init finishes
-        // (see PlayLayer::init hook above calling applyLayoutMode())
     }
 
     void onQuit() {
@@ -211,14 +257,13 @@ class $modify(TrakinesPlayLayer, PlayLayer) {
         g.inPlayLayer = false;
         g.playLayer   = nullptr;
         s_snapshots.clear();
-        s_blueBG = nullptr;
+        s_colorSnapshots.clear();
 
-        // Release Spout2 and render texture
         s_spout.release();
         if (s_renderTex) {
             s_renderTex->release();
-            s_renderTex  = nullptr;
-            s_lastTexWidth = 0;
+            s_renderTex     = nullptr;
+            s_lastTexWidth  = 0;
             s_lastTexHeight = 0;
         }
 
@@ -228,17 +273,6 @@ class $modify(TrakinesPlayLayer, PlayLayer) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Hook: CCDirector::drawScene — dual render pipeline
-//
-// GAMEPLAY with layout mode + Spout2:
-//   1. Restore full-decor state on all objects
-//   2. Render the scene to an offscreen CCRenderTexture (full decor)
-//   3. Send that texture to Spout2 → OBS gets full decorations
-//   4. Reapply layout mode visuals
-//   5. Call original drawScene → player sees layout mode on screen
-//
-// NON-GAMEPLAY or layout mode off:
-//   1. Call original drawScene → renders normally
-//   2. Send the framebuffer to Spout2 → OBS mirrors screen 1:1
 // ═══════════════════════════════════════════════════════════════════════════
 class $modify(TrakinesDirector, CCDirector) {
 
@@ -250,43 +284,37 @@ class $modify(TrakinesDirector, CCDirector) {
                        && g.spoutEnabled
                        && s_spout.isInitialized()
                        && s_renderTex != nullptr
+                       && g.playLayer != nullptr
                        && !s_snapshots.empty();
 
         if (dualRender) {
-            // ── Pass 1: full-decor render for Spout2 ────────────────────
-
-            // Temporarily restore all objects to their original state
+            // ── Pass 1: full-decor render → OBS ────────────────────────────
             restoreFullDecor();
+            restoreLevelColors(g.playLayer);
 
-            // Render the fully-decorated scene into our offscreen texture
             s_renderTex->beginWithClear(0.0f, 0.0f, 0.0f, 1.0f);
             if (m_pRunningScene) {
                 m_pRunningScene->visit();
             }
             s_renderTex->end();
 
-            // Send the texture to Spout2 (zero-copy DX/GL interop on NVIDIA)
             GLuint texID = s_renderTex->getSprite()->getTexture()->getName();
             auto pixelSize = CCDirector::sharedDirector()->getWinSizeInPixels();
             unsigned int w = static_cast<unsigned int>(pixelSize.width);
             unsigned int h = static_cast<unsigned int>(pixelSize.height);
             s_spout.sendTexture(texID, w, h);
 
-            // ── Pass 2: layout mode render for player ───────────────────
-
-            // Reapply layout mode (white silhouettes, hide deco, blue bg)
+            // ── Pass 2: layout render → player screen ──────────────────────
             applyLayoutMode();
+            applyLayoutColors(g.playLayer);
 
-            // Normal render to screen — player sees layout mode
             CCDirector::drawScene();
 
         } else {
-            // ── Single render (menu / pause / editor / layout off) ──────
-
-            // Render normally
+            // ── Single render (menu / pause / editor / layout or spout off) ─
             CCDirector::drawScene();
 
-            // If Spout2 is active, mirror the framebuffer to OBS
+            // Mirror the screen 1:1 to OBS (indicators / menus / editor intact)
             if (g.spoutEnabled && s_spout.isInitialized()) {
                 auto pixelSize = CCDirector::sharedDirector()->getWinSizeInPixels();
                 unsigned int w = static_cast<unsigned int>(pixelSize.width);
@@ -298,29 +326,29 @@ class $modify(TrakinesDirector, CCDirector) {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Hook: Keyboard — U key toggles layout mode
+// Hook: Keyboard — 'U' toggles layout mode live
 // ═══════════════════════════════════════════════════════════════════════════
 class $modify(CCKeyboardDispatcher) {
 
     bool dispatchKeyboardMSG(enumKeyCodes key, bool down, bool repeat, double delta) {
-        // 'U' key = virtual key code 0x55 = 85
-        constexpr int VK_U = 0x55;
+        constexpr int VK_U = 0x55;  // 'U'
 
         if (down && !repeat && key == static_cast<enumKeyCodes>(VK_U)) {
             auto& g = TrakinesGlobal::get();
 
-            // Only toggle during gameplay
-            if (g.inPlayLayer) {
+            if (g.inPlayLayer && g.playLayer) {
                 g.layoutMode = !g.layoutMode;
                 Mod::get()->setSavedValue("layout_mode", g.layoutMode);
 
                 if (g.layoutMode) {
+                    snapshotLevelColors(g.playLayer);
                     applyLayoutMode();
+                    applyLayoutColors(g.playLayer);
                 } else {
                     restoreFullDecor();
+                    restoreLevelColors(g.playLayer);
                 }
 
-                // Brief notification
                 Notification::create(
                     g.layoutMode ? "Layout Mode: ON" : "Layout Mode: OFF",
                     NotificationIcon::None,
