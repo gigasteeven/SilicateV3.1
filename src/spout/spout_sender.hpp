@@ -2,15 +2,28 @@
 
 /// Spout2 sender wrapper for Trakines
 /// Sends OpenGL textures/framebuffers to OBS via Spout2 zero-copy GPU sharing
-
-#ifdef _WIN32
-#include "Spout.h"
-#endif
+///
+/// NOTE: This header is deliberately kept free of Spout2 / OpenGL headers.
+/// Geode/cocos2d translation units (e.g. main.cpp) include this wrapper, and
+/// cocos ships its own GLEW. Pulling in Spout's GL extension loader here would
+/// clash with GLEW ("redeclaration of __glewShaderSource"). We forward-declare
+/// the Spout type and hide it behind a pointer; the real Spout headers are only
+/// included inside spout_sender.cpp (which is excluded from Geode's PCH).
 
 #include <string>
 
+#ifdef _WIN32
+class Spout;  // forward declaration — real definition lives in spout_sender.cpp
+#endif
+
 class TrakinesSpout {
 public:
+    TrakinesSpout();
+    ~TrakinesSpout();
+
+    TrakinesSpout(const TrakinesSpout&) = delete;
+    TrakinesSpout& operator=(const TrakinesSpout&) = delete;
+
     /// Initialize Spout2 sender with given name and dimensions
     bool init(const char* senderName, unsigned int width, unsigned int height);
 
@@ -47,6 +60,6 @@ private:
     unsigned int m_height = 0;
 
 #ifdef _WIN32
-    Spout m_spout;
+    Spout* m_spout = nullptr;  // owned; created in ctor, destroyed in dtor
 #endif
 };

@@ -302,7 +302,7 @@ class $modify(TrakinesDirector, CCDirector) {
 // ═══════════════════════════════════════════════════════════════════════════
 class $modify(CCKeyboardDispatcher) {
 
-    bool dispatchKeyboardMSG(enumKeyCodes key, bool down, bool repeat) {
+    bool dispatchKeyboardMSG(enumKeyCodes key, bool down, bool repeat, double delta) {
         // 'U' key = virtual key code 0x55 = 85
         constexpr int VK_U = 0x55;
 
@@ -329,6 +329,6 @@ class $modify(CCKeyboardDispatcher) {
             }
         }
 
-        return CCKeyboardDispatcher::dispatchKeyboardMSG(key, down, repeat);
+        return CCKeyboardDispatcher::dispatchKeyboardMSG(key, down, repeat, delta);
     }
 };

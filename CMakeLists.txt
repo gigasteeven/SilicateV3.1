@@ -5,7 +5,7 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
 project(Trakines VERSION 1.0.0)
 
-# ─── Spout2 SDK via FetchContent ─────────────────────────────────────────────
+# ─── Spout2 SDK via FetchContent ──────────────────────────────────────────────
 include(FetchContent)
 FetchContent_Declare(
     Spout2
@@ -19,12 +19,8 @@ FetchContent_Populate(Spout2)
 
 set(SPOUT_DIR "${spout2_SOURCE_DIR}/SPOUTSDK/SpoutGL")
 
-# ─── Mod sources ─────────────────────────────────────────────────────────────
-add_library(${PROJECT_NAME} SHARED
-    src/main.cpp
-    src/spout/spout_sender.cpp
-
-    # Spout2 SDK embedded sources
+# Embedded Spout2 SDK sources (compiled directly into the mod).
+set(SPOUT_SOURCES
     ${SPOUT_DIR}/Spout.cpp
     ${SPOUT_DIR}/SpoutCopy.cpp
     ${SPOUT_DIR}/SpoutDirectX.cpp
@@ -34,6 +30,13 @@ add_library(${PROJECT_NAME} SHARED
     ${SPOUT_DIR}/SpoutSenderNames.cpp
     ${SPOUT_DIR}/SpoutSharedMemory.cpp
     ${SPOUT_DIR}/SpoutUtils.cpp
+)
+
+# ─── Mod sources ──────────────────────────────────────────────────────────────
+add_library(${PROJECT_NAME} SHARED
+    src/main.cpp
+    src/spout/spout_sender.cpp
+    ${SPOUT_SOURCES}
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -50,23 +53,25 @@ target_link_libraries(${PROJECT_NAME}
     Version
 )
 
-# Suppress Spout2 warnings (third-party code)
-if(MSVC)
-    set_source_files_properties(
-        ${SPOUT_DIR}/Spout.cpp
-        ${SPOUT_DIR}/SpoutCopy.cpp
-        ${SPOUT_DIR}/SpoutDirectX.cpp
-        ${SPOUT_DIR}/SpoutFrameCount.cpp
-        ${SPOUT_DIR}/SpoutGL.cpp
-        ${SPOUT_DIR}/SpoutGLextensions.cpp
-        ${SPOUT_DIR}/SpoutSenderNames.cpp
-        ${SPOUT_DIR}/SpoutSharedMemory.cpp
-        ${SPOUT_DIR}/SpoutUtils.cpp
-        PROPERTIES COMPILE_FLAGS "/w"
-    )
-endif()
+# ─── Isolate Spout2 from Geode's precompiled header ───────────────────────────
+# Geode's PCH force-includes cocos2d (and its bundled GLEW) into every source
+# file of this target. The embedded Spout2 SDK ships its own OpenGL extension
+# loader whose function-pointer typedefs collide with GLEW's, causing
+# "redeclaration of '__glewShaderSource' with a different type" errors.
+#
+# Skipping the PCH on the Spout SDK translation units (and on our thin wrapper,
+# which is the ONLY file that includes Spout headers) keeps GLEW out of those
+# units so Spout's own loader is used with no conflict. We also enable SSSE3
+# (SpoutCopy.cpp uses _mm_shuffle_epi8) and silence third-party warnings.
+set_source_files_properties(
+    ${SPOUT_SOURCES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/spout/spout_sender.cpp
+    PROPERTIES
+        SKIP_PRECOMPILE_HEADERS ON
+        COMPILE_OPTIONS "-mssse3;-w"
+)
 
-# ─── Geode SDK ───────────────────────────────────────────────────────────────
+# ─── Geode SDK ────────────────────────────────────────────────────────────────
 if (NOT DEFINED ENV{GEODE_SDK})
     message(FATAL_ERROR "GEODE_SDK environment variable not set")
 endif()
