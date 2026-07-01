@@ -1,17 +1,22 @@
 /// ═══════════════════════════════════════════════════════════════════════════
 /// Trakines — Main entry point
 ///
-/// Player screen  : XDBot-style layout mode (deco hidden, white silhouettes,
-///                  authentic blue BG/ground/line via GD color channels).
-/// OBS via Spout2 : full original decor for the level + all UI/indicators.
+/// Player screen  : XDBot-style layout (deco hidden, white silhouettes, blue
+///                  background / ground / line).
+/// OBS via Spout2 : the ORIGINAL decorated level + all UI/indicators, captured
+///                  straight from the real framebuffer at the true resolution.
 ///
-/// Rendering:
-///   • Spout ON  → dual render. Each frame: restore full decor + original
-///                 colors → render offscreen (sent to OBS) → re-apply layout
-///                 (shown to the player).
-///   • Spout OFF → single render of the layout (no FPS cost).
-///   • Menu/pause/editor → single render, framebuffer mirrored 1:1 to OBS so
-///                 every indicator / menu / the editor stays intact on stream.
+/// Per frame while playing (layout + Spout on):
+///   1. CCDirector::drawScene()  → renders the ORIGINAL level to the screen and
+///      advances game logic exactly once.
+///   2. Spout SendFbo(0)         → OBS receives that original frame (real res).
+///   3. Apply layout transiently (object colors → white, deco hidden, blue BG)
+///      and re-visit the scene → the PLAYER sees the layout.
+///   4. Restore the original state so the next frame's step 1 is original again.
+///
+/// The game state is never permanently modified, so GD's effect manager keeps
+/// running normally (no pulsing) and OBS always gets the true level.
+/// Menu / pause / editor use a single render mirrored 1:1 to OBS.
 /// ═══════════════════════════════════════════════════════════════════════════
 
 #include <Geode/Geode.hpp>
@@ -19,8 +24,7 @@
 #include <Geode/modify/LevelTools.hpp>
 #include <Geode/modify/CCDirector.hpp>
 #include <Geode/modify/CCKeyboardDispatcher.hpp>
-#include <Geode/binding/GJEffectManager.hpp>
-#include <Geode/binding/ColorAction.hpp>
+#include <Geode/binding/GJGroundLayer.hpp>
 
 #include "global.hpp"
 #include "layout_mode.hpp"
@@ -28,155 +32,116 @@
 
 using namespace geode::prelude;
 
-// ─── Per-object snapshot (original visuals, used to restore full decor) ───────
+// ─── XDBot layout palette ─────────────────────────────────────────────────────
+static const ccColor3B kBgBlue     = {40, 125, 255};
+static const ccColor3B kGroundBlue = {0, 102, 255};
+static const ccColor3B kLineWhite  = {255, 255, 255};
+
+// ─── Per-object snapshot ──────────────────────────────────────────────────────
+// `hide`/`visible`/`hasNoGlow` are captured once (static level data). `liveColor`
+// / `liveOpacity` are captured fresh every frame right before the layout render
+// (so we restore the exact post-effect-manager color for the next OBS frame).
 struct ObjectSnapshot {
     GameObject* obj      = nullptr;
-    int  mainColorID     = 0;
-    int  detailColorID   = 0;
-    bool detailUsesHSV   = false;
-    bool baseUsesHSV     = false;
     bool hasNoGlow       = false;
-    bool isHide          = false;
-    GLubyte opacity      = 255;
     bool visible         = true;
-    bool hide            = false;   // hidden in layout (deco / excluded trigger)
+    bool hide            = false;   // deco / excluded trigger — hidden in layout
+    ccColor3B liveColor  = {255, 255, 255};
+    GLubyte   liveOpacity= 255;
 };
 
-// ─── Original color-channel snapshot (to restore full-decor colors for OBS) ───
-struct ColorSnapshot {
-    int id = 0;
-    ccColor3B color   = {255, 255, 255};
-    ccColor3B from    = {255, 255, 255};
-    ccColor3B to      = {255, 255, 255};
-    bool blending     = false;
+// ─── Background/ground color snapshot (restored for the OBS frame) ────────────
+struct BgSnapshot {
+    bool valid = false;
+    ccColor3B bg   = {255, 255, 255};
+    ccColor3B g1   = {255, 255, 255};
+    ccColor3B g2   = {255, 255, 255};
+    ccColor3B line = {255, 255, 255};
+    ccColor3B g1b  = {255, 255, 255};
+    ccColor3B g2b  = {255, 255, 255};
+    ccColor3B lineb= {255, 255, 255};
 };
 
 static std::vector<ObjectSnapshot> s_snapshots;
-static std::vector<ColorSnapshot>  s_colorSnapshots;
+static BgSnapshot                  s_bg;
 static TrakinesSpout               s_spout;
-static cocos2d::CCRenderTexture*   s_renderTex     = nullptr;
-static unsigned int                s_lastTexWidth  = 0;
-static unsigned int                s_lastTexHeight = 0;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Color-channel helpers (authentic XDBot blue via GJEffectManager)
+// Layout apply / restore (transient — only around the on-screen re-render)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Snapshot the current colors of every layout channel so we can restore the
-/// real decor colors for the OBS render pass.
-static void snapshotLevelColors(PlayLayer* pl) {
-    s_colorSnapshots.clear();
-    if (!pl || !pl->m_effectManager) return;
-
-    for (const auto& ch : layoutColorChannels) {
-        ColorAction* action = pl->m_effectManager->getColorAction(ch.id);
-        if (!action) continue;
-        ColorSnapshot snap;
-        snap.id       = ch.id;
-        snap.color    = action->m_color;
-        snap.from     = action->m_fromColor;
-        snap.to       = action->m_toColor;
-        snap.blending = action->m_blending;
-        s_colorSnapshots.push_back(snap);
-    }
+static void colorGroundLayout(GJGroundLayer* gl, ccColor3B& sg1, ccColor3B& sg2, ccColor3B& sln) {
+    if (!gl) return;
+    if (gl->m_ground1Sprite) { sg1 = gl->m_ground1Sprite->getColor(); gl->m_ground1Sprite->setColor(kGroundBlue); }
+    if (gl->m_ground2Sprite) { sg2 = gl->m_ground2Sprite->getColor(); gl->m_ground2Sprite->setColor(kGroundBlue); }
+    if (gl->m_lineSprite)    { sln = gl->m_lineSprite->getColor();    gl->m_lineSprite->setColor(kLineWhite); }
 }
 
-/// Force the layout channels to XDBot's blue/white palette.
-static void applyLayoutColors(PlayLayer* pl) {
-    if (!pl || !pl->m_effectManager) return;
-
-    for (const auto& ch : layoutColorChannels) {
-        ColorAction* action = pl->m_effectManager->getColorAction(ch.id);
-        if (!action) continue;
-        ccColor3B col = ccc3(ch.r, ch.g, ch.b);
-        action->m_color     = col;
-        action->m_fromColor = col;
-        action->m_toColor   = col;
-        action->m_blending  = ch.blending;
-    }
-    pl->m_effectManager->calculateBaseActiveColors();
+static void colorGroundRestore(GJGroundLayer* gl, const ccColor3B& sg1, const ccColor3B& sg2, const ccColor3B& sln) {
+    if (!gl) return;
+    if (gl->m_ground1Sprite) gl->m_ground1Sprite->setColor(sg1);
+    if (gl->m_ground2Sprite) gl->m_ground2Sprite->setColor(sg2);
+    if (gl->m_lineSprite)    gl->m_lineSprite->setColor(sln);
 }
 
-/// Restore the level's original color channels (used for the OBS render pass).
-static void restoreLevelColors(PlayLayer* pl) {
-    if (!pl || !pl->m_effectManager) return;
-
-    for (const auto& snap : s_colorSnapshots) {
-        ColorAction* action = pl->m_effectManager->getColorAction(snap.id);
-        if (!action) continue;
-        action->m_color     = snap.color;
-        action->m_fromColor = snap.from;
-        action->m_toColor   = snap.to;
-        action->m_blending  = snap.blending;
-    }
-    pl->m_effectManager->calculateBaseActiveColors();
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Object visual helpers
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Restore every tracked object to its original (full-decor) state.
-static void restoreFullDecor() {
-    for (auto& s : s_snapshots) {
-        if (!s.obj) continue;
-        s.obj->m_activeMainColorID   = s.mainColorID;
-        s.obj->m_activeDetailColorID = s.detailColorID;
-        s.obj->m_detailUsesHSV       = s.detailUsesHSV;
-        s.obj->m_baseUsesHSV         = s.baseUsesHSV;
-        s.obj->m_hasNoGlow           = s.hasNoGlow;
-        s.obj->m_isHide              = s.isHide;
-        s.obj->setOpacity(s.opacity);
-        s.obj->setVisible(s.visible);
-    }
-}
-
-/// Apply the XDBot layout look: deco/excluded hidden, everything else a clean
-/// white silhouette (matches XDBot's deco-removal result visually).
-static void applyLayoutMode() {
+/// Turn the currently-original scene into the XDBot layout look. We set sprite
+/// colors DIRECTLY (not the logical color ID) so the change is visible for the
+/// immediate re-visit — the effect manager already colored the sprites this
+/// frame, so a logical-ID change alone would be ignored until next frame.
+static void applyLayout(PlayLayer* pl) {
     for (auto& s : s_snapshots) {
         if (!s.obj) continue;
 
-        // Decoration + excluded triggers: hidden (mimics XDBot's deletion).
-        if (s.hide) {
-            s.obj->setVisible(false);
-            continue;
-        }
+        // Decoration + excluded triggers → hidden (matches XDBot's deletion).
+        if (s.hide) { s.obj->setVisible(false); continue; }
 
-        // Object 2065 (area-color visual) — invisible, marked hidden (XDBot).
-        bool is2065 = (s.obj->m_objectID == 2065);
+        // 2065 (area-color visual) → invisible in layout (XDBot).
+        if (s.obj->m_objectID == 2065) { s.obj->setVisible(false); continue; }
 
-        // Gameplay/solid objects → white silhouette, no glow, no HSV (XDBot).
-        s.obj->m_activeMainColorID   = -1;
-        s.obj->m_activeDetailColorID = -1;
-        s.obj->m_detailUsesHSV       = false;
-        s.obj->m_baseUsesHSV         = false;
-        s.obj->m_hasNoGlow           = true;
-        s.obj->m_isHide              = is2065;
-        s.obj->setOpacity(is2065 ? 0 : 255);
-        s.obj->setVisible(!is2065);
+        // Gameplay/solid objects → clean white silhouette.
+        s.liveColor   = s.obj->getColor();
+        s.liveOpacity = s.obj->getOpacity();
+        s.obj->setColor(kLineWhite);
+        s.obj->m_hasNoGlow = true;
     }
+
+    // Blue background / ground / white line (set sprite colors directly).
+    s_bg = BgSnapshot{};
+    if (pl->m_background) { s_bg.bg = pl->m_background->getColor(); pl->m_background->setColor(kBgBlue); }
+    colorGroundLayout(pl->m_groundLayer,  s_bg.g1,  s_bg.g2,  s_bg.line);
+    colorGroundLayout(pl->m_groundLayer2, s_bg.g1b, s_bg.g2b, s_bg.lineb);
+    s_bg.valid = true;
 }
 
-/// Ensure the offscreen render texture matches the current window size.
-static void ensureRenderTexture(unsigned int w, unsigned int h) {
-    if (s_renderTex && s_lastTexWidth == w && s_lastTexHeight == h) return;
+/// Restore the true decor so the next frame's OBS capture is the real level.
+static void restoreOriginal(PlayLayer* pl) {
+    for (auto& s : s_snapshots) {
+        if (!s.obj) continue;
 
-    if (s_renderTex) {
-        s_renderTex->release();
-        s_renderTex = nullptr;
+        if (s.hide) { s.obj->setVisible(s.visible); continue; }
+        if (s.obj->m_objectID == 2065) { s.obj->setVisible(s.visible); continue; }
+
+        s.obj->setColor(s.liveColor);
+        s.obj->m_hasNoGlow = s.hasNoGlow;
     }
 
-    auto winSize = CCDirector::sharedDirector()->getWinSize();
-    s_renderTex = CCRenderTexture::create(
-        static_cast<int>(winSize.width),
-        static_cast<int>(winSize.height)
-    );
+    if (!s_bg.valid) return;
+    if (pl->m_background) pl->m_background->setColor(s_bg.bg);
+    colorGroundRestore(pl->m_groundLayer,  s_bg.g1,  s_bg.g2,  s_bg.line);
+    colorGroundRestore(pl->m_groundLayer2, s_bg.g1b, s_bg.g2b, s_bg.lineb);
+    s_bg.valid = false;
+}
 
-    if (s_renderTex) {
-        s_renderTex->retain();
-        s_lastTexWidth  = w;
-        s_lastTexHeight = h;
+static void frameSizePixels(unsigned int& w, unsigned int& h) {
+    auto view = CCDirector::sharedDirector()->getOpenGLView();
+    if (view) {
+        auto fs = view->getFrameSize();
+        w = static_cast<unsigned int>(fs.width);
+        h = static_cast<unsigned int>(fs.height);
+    } else {
+        auto ps = CCDirector::sharedDirector()->getWinSizeInPixels();
+        w = static_cast<unsigned int>(ps.width);
+        h = static_cast<unsigned int>(ps.height);
     }
 }
 
@@ -202,52 +167,35 @@ class $modify(TrakinesPlayLayer, PlayLayer) {
         g.spoutEnabled = Mod::get()->getSavedValue<bool>("spout_enabled", true);
 
         s_snapshots.clear();
-        s_colorSnapshots.clear();
+        s_bg = BgSnapshot{};
 
-        // Original init triggers addObject for every level object.
         if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
 
         g.inPlayLayer = true;
         g.playLayer   = this;
 
-        if (g.layoutMode) {
-            // Snapshot the real colors first, then paint the layout palette.
-            snapshotLevelColors(this);
-            applyLayoutMode();
-            applyLayoutColors(this);
-        }
-
         if (g.spoutEnabled) {
-            auto pixelSize = CCDirector::sharedDirector()->getWinSizeInPixels();
-            unsigned int w = static_cast<unsigned int>(pixelSize.width);
-            unsigned int h = static_cast<unsigned int>(pixelSize.height);
+            unsigned int w, h;
+            frameSizePixels(w, h);
             s_spout.init("Trakines", w, h);
-            ensureRenderTexture(w, h);
         }
 
         return true;
     }
 
     void addObject(GameObject* obj) {
-        // ALWAYS add the object — even deco — so the OBS pass can render it.
+        // ALWAYS create the object so the OBS pass renders the full decor.
         PlayLayer::addObject(obj);
 
         auto& g = TrakinesGlobal::get();
         if (!g.layoutMode) return;
 
         ObjectSnapshot snap;
-        snap.obj           = obj;
-        snap.mainColorID   = obj->m_activeMainColorID;
-        snap.detailColorID = obj->m_activeDetailColorID;
-        snap.detailUsesHSV = obj->m_detailUsesHSV;
-        snap.baseUsesHSV   = obj->m_baseUsesHSV;
-        snap.hasNoGlow     = obj->m_hasNoGlow;
-        snap.isHide        = obj->m_isHide;
-        snap.opacity       = obj->getOpacity();
-        snap.visible       = obj->isVisible();
-        // Hidden in layout view: decorations and excluded triggers.
-        snap.hide          = decoObjectIDs.contains(obj->m_objectID)
-                          || excludedTriggerIDs.contains(obj->m_objectID);
+        snap.obj       = obj;
+        snap.hasNoGlow = obj->m_hasNoGlow;
+        snap.visible   = obj->isVisible();
+        snap.hide      = decoObjectIDs.contains(obj->m_objectID)
+                      || excludedTriggerIDs.contains(obj->m_objectID);
 
         s_snapshots.push_back(snap);
     }
@@ -257,71 +205,52 @@ class $modify(TrakinesPlayLayer, PlayLayer) {
         g.inPlayLayer = false;
         g.playLayer   = nullptr;
         s_snapshots.clear();
-        s_colorSnapshots.clear();
-
+        s_bg = BgSnapshot{};
         s_spout.release();
-        if (s_renderTex) {
-            s_renderTex->release();
-            s_renderTex     = nullptr;
-            s_lastTexWidth  = 0;
-            s_lastTexHeight = 0;
-        }
 
         PlayLayer::onQuit();
     }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Hook: CCDirector::drawScene — dual render pipeline
+// Hook: CCDirector::drawScene — original → OBS, layout → screen
 // ═══════════════════════════════════════════════════════════════════════════
 class $modify(TrakinesDirector, CCDirector) {
 
     void drawScene() {
         auto& g = TrakinesGlobal::get();
+        PlayLayer* pl = g.playLayer;
 
-        bool dualRender = g.inPlayLayer
-                       && g.layoutMode
-                       && g.spoutEnabled
-                       && s_spout.isInitialized()
-                       && s_renderTex != nullptr
-                       && g.playLayer != nullptr
-                       && !s_snapshots.empty();
+        bool layoutActive = g.inPlayLayer && g.layoutMode && pl != nullptr && !s_snapshots.empty();
+        bool spout        = g.spoutEnabled && s_spout.isInitialized();
 
-        if (dualRender) {
-            // ── Pass 1: full-decor render → OBS ────────────────────────────
-            restoreFullDecor();
-            restoreLevelColors(g.playLayer);
-
-            s_renderTex->beginWithClear(0.0f, 0.0f, 0.0f, 1.0f);
-            if (m_pRunningScene) {
-                m_pRunningScene->visit();
-            }
-            s_renderTex->end();
-
-            GLuint texID = s_renderTex->getSprite()->getTexture()->getName();
-            auto pixelSize = CCDirector::sharedDirector()->getWinSizeInPixels();
-            unsigned int w = static_cast<unsigned int>(pixelSize.width);
-            unsigned int h = static_cast<unsigned int>(pixelSize.height);
-            s_spout.sendTexture(texID, w, h);
-
-            // ── Pass 2: layout render → player screen ──────────────────────
-            applyLayoutMode();
-            applyLayoutColors(g.playLayer);
-
+        if (!layoutActive) {
+            // Menu / pause / editor / layout off — single render, mirror 1:1.
             CCDirector::drawScene();
-
-        } else {
-            // ── Single render (menu / pause / editor / layout or spout off) ─
-            CCDirector::drawScene();
-
-            // Mirror the screen 1:1 to OBS (indicators / menus / editor intact)
-            if (g.spoutEnabled && s_spout.isInitialized()) {
-                auto pixelSize = CCDirector::sharedDirector()->getWinSizeInPixels();
-                unsigned int w = static_cast<unsigned int>(pixelSize.width);
-                unsigned int h = static_cast<unsigned int>(pixelSize.height);
+            if (spout) {
+                unsigned int w, h; frameSizePixels(w, h);
                 s_spout.sendFramebuffer(w, h);
             }
+            return;
         }
+
+        // 1) Original render + game logic (state is untouched = original).
+        CCDirector::drawScene();
+
+        // 2) Send that original frame to OBS at the true resolution.
+        if (spout) {
+            unsigned int w, h; frameSizePixels(w, h);
+            s_spout.sendFramebuffer(w, h);
+        }
+
+        // 3) Draw the layout over the screen (visual only — no logic advance).
+        applyLayout(pl);
+        glClearColor(kBgBlue.r / 255.f, kBgBlue.g / 255.f, kBgBlue.b / 255.f, 1.f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        if (m_pRunningScene) m_pRunningScene->visit();
+
+        // 4) Restore the true decor for the next frame's OBS capture.
+        restoreOriginal(pl);
     }
 };
 
@@ -335,19 +264,12 @@ class $modify(CCKeyboardDispatcher) {
 
         if (down && !repeat && key == static_cast<enumKeyCodes>(VK_U)) {
             auto& g = TrakinesGlobal::get();
-
             if (g.inPlayLayer && g.playLayer) {
                 g.layoutMode = !g.layoutMode;
                 Mod::get()->setSavedValue("layout_mode", g.layoutMode);
 
-                if (g.layoutMode) {
-                    snapshotLevelColors(g.playLayer);
-                    applyLayoutMode();
-                    applyLayoutColors(g.playLayer);
-                } else {
-                    restoreFullDecor();
-                    restoreLevelColors(g.playLayer);
-                }
+                // If turning layout off, make sure any transient state is undone.
+                if (!g.layoutMode) restoreOriginal(g.playLayer);
 
                 Notification::create(
                     g.layoutMode ? "Layout Mode: ON" : "Layout Mode: OFF",
