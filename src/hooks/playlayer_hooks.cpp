@@ -6,7 +6,6 @@
 
 using namespace geode::prelude;
 
-// ── LevelTools: bypass integrity check when Layout Mode is on ──
 class $modify(LevelTools) {
     static bool verifyLevelIntegrity(gd::string v1, int v2) {
         if (TrakinesGlobal::get().layoutMode) return true;
@@ -14,12 +13,9 @@ class $modify(LevelTools) {
     }
 };
 
-// Re-entrancy guard for visit() — defined here, declared extern in mirror_renderer.cpp
 bool s_mirrorRendering = false;
 
-// ── PlayLayer hooks ────────────────────────────────────────
 class $modify(PlayLayer) {
-    // ── addObject: strip colors/glow in Layout Mode ────────
     void addObject(GameObject* obj) {
         if (!TrakinesGlobal::get().layoutMode)
             return PlayLayer::addObject(obj);
@@ -39,7 +35,6 @@ class $modify(PlayLayer) {
         obj->setVisible(obj->m_objectID != 2065);
     }
 
-    // ── init: apply Layout Mode transform + init mirror ────
     bool init(GJGameLevel* level, bool b1, bool b2) {
         auto& g = TrakinesGlobal::get();
         g.loadSettings();
@@ -68,15 +63,12 @@ class $modify(PlayLayer) {
         return true;
     }
 
-    // ── visit: called every frame by the scene graph ───────
-    // This is MORE reliable than draw() — visit() is always
-    // called for every CCNode in the scene graph traversal.
-    void visit() {
-        PlayLayer::visit();
-
-        // Re-entrancy guard — prevent infinite recursion when
-        // renderAndSend() calls scene->visit() internally
-        if (s_mirrorRendering) return;
+    // ── update: THIS HOOK DEFINITELY WORKS (Layout Mode uses it) ──
+    // Call renderAndSend() from here. The GL context is valid during
+    // the game loop. We render the scene as-is (previous frame state)
+    // which is fine — 1 frame lag at 60fps = 16ms, imperceptible.
+    void update(float dt) {
+        PlayLayer::update(dt);
 
         auto& g = TrakinesGlobal::get();
         if (g.spoutEnabled && g.inLevel && g.mirrorRenderer.isReady()) {
@@ -84,7 +76,6 @@ class $modify(PlayLayer) {
         }
     }
 
-    // ── onExit: cleanup when leaving level ─────────────────
     void onExit() {
         PlayLayer::onExit();
 
