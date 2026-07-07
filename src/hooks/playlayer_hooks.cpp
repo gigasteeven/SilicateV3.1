@@ -91,13 +91,4 @@ class $modify(PlayLayer) {
             g.mirrorRenderer.cleanup();
         }
     }
-
-    // ── destructor: safety cleanup ─────────────────────────
-    ~PlayLayer() {
-        auto& g = TrakinesGlobal::get();
-        if (g.inLevel) {
-            g.inLevel = false;
-            g.mirrorRenderer.cleanup();
-        }
-    }
 };
