@@ -52,5 +52,10 @@
       "max": 240
     }
   },
-  "tags": ["gameplay", "utility"]
+  "tags": ["gameplay", "utility"],
+  "resources": {
+    "files": [
+      "resources/SpoutLibrary.dll"
+    ]
+  }
 }

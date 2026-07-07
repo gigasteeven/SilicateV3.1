@@ -1,5 +1,6 @@
 #include "layout_mode.hpp"
-#include <Geode/Utils/ZipUtils.hpp>
+#include <Geode/Geode.hpp>
+#include <cocos/support/zip_support/ZipUtils.h>
 #include <algorithm>
 
 // ── Color replacement string (from XDBotFork) ──────────────

@@ -5,7 +5,8 @@
 #include "../spout/spout_sender.hpp"
 
 #ifdef TRAKINES_SPOUT_ENABLED
-#include <GL/glew.h>
+#include <windows.h>
+#include <GL/gl.h>
 #endif
 
 using namespace geode::prelude;

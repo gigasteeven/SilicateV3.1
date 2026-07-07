@@ -34,33 +34,17 @@ endif()
 add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
 setup_geode_mod(${PROJECT_NAME})
 
-# ── Spout2 (Windows only, static link) ─────────────────────
+# ── Spout2 (Windows only, dynamic DLL loading) ─────────────
+# SpoutLibrary.dll is bundled in resources/ and loaded at runtime.
+# We only need the header (SpoutLibrary.h) which defines a pure
+# virtual interface — no GL headers, no static lib needed.
 if (WIN32)
     target_include_directories(${PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/libs/Spout2/include
     )
 
-    # Use MD runtime lib (default for Geode build-geode-mod Release)
-    # NOTE: must use plain signature (no PRIVATE keyword) because
-    # setup_geode_mod uses plain target_link_libraries internally.
-    target_link_libraries(${PROJECT_NAME}
-        ${CMAKE_CURRENT_SOURCE_DIR}/libs/Spout2/lib/Spout_static_MD.lib
-        opengl32
-        d3d11
-        dxgi
-        d3d9
-        dwmapi
-        winmm
-        user32
-        gdi32
-        advapi32
-        shell32
-        version
-    )
-
     target_compile_definitions(${PROJECT_NAME} PRIVATE
         TRAKINES_SPOUT_ENABLED
-        SPOUT_BUILD_DLL
     )
 endif()
 

@@ -4,14 +4,17 @@
 #include <string>
 
 #ifdef TRAKINES_SPOUT_ENABLED
-#include "SpoutSender.h"
+#include <windows.h>
+// SpoutLibrary.h defines its own GL types (GLuint, GLint, GLenum)
+// and does NOT include GL headers — pure virtual interface
+#include "SpoutLibrary.h"
 #endif
 
 using namespace geode::prelude;
 
 // ── Spout2 sender wrapper ──────────────────────────────────
-// Manages a Spout2 sender that shares an OpenGL texture with OBS.
-// Uses GPU-to-GPU texture sharing (NVIDIA GL/DX interop on RTX 3090).
+// Uses SpoutLibrary.h (C++ virtual interface) loaded dynamically.
+// The SpoutLibrary.dll is bundled in resources/ and extracted at runtime.
 class SpoutSenderWrap {
 public:
     SpoutSenderWrap();
@@ -38,7 +41,14 @@ public:
 
 private:
 #ifdef TRAKINES_SPOUT_ENABLED
-    SpoutSender* m_sender = nullptr;
+    HMODULE m_dll = nullptr;
+    SPOUTHANDLE m_spout = nullptr;
+    typedef SPOUTHANDLE(WINAPI* GetSpoutFunc)(VOID);
+    GetSpoutFunc m_getSpout = nullptr;
 #endif
     bool m_initialized = false;
+    std::string m_name;
+
+    // Load SpoutLibrary.dll from the mod's resources directory
+    bool loadDll();
 };
