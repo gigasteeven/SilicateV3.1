@@ -41,7 +41,9 @@ if (WIN32)
     )
 
     # Use MD runtime lib (default for Geode build-geode-mod Release)
-    target_link_libraries(${PROJECT_NAME} PRIVATE
+    # NOTE: must use plain signature (no PRIVATE keyword) because
+    # setup_geode_mod uses plain target_link_libraries internally.
+    target_link_libraries(${PROJECT_NAME}
         ${CMAKE_CURRENT_SOURCE_DIR}/libs/Spout2/lib/Spout_static_MD.lib
         opengl32
         d3d11
@@ -56,9 +58,9 @@ if (WIN32)
         version
     )
 
-    target_compile_definitions(${PROJECT_NAME} PRIVATE
+    target_compile_definitions(${PROJECT_NAME}
         TRAKINES_SPOUT_ENABLED
-        SPOUT_BUILD_DLL          # so SPOUT_DLLEXP is empty (we link static)
+        SPOUT_BUILD_DLL
     )
 endif()
 
