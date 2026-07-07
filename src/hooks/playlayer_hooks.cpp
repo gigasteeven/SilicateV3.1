@@ -14,8 +14,8 @@ class $modify(LevelTools) {
     }
 };
 
-// Re-entrancy guard for visit()
-static bool s_mirrorRendering = false;
+// Re-entrancy guard for visit() — defined here, declared extern in mirror_renderer.cpp
+bool s_mirrorRendering = false;
 
 // ── PlayLayer hooks ────────────────────────────────────────
 class $modify(PlayLayer) {
