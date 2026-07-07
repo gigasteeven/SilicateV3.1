@@ -24,7 +24,7 @@ bool SpoutSenderWrap::loadDll() {
         dllPath = mod->getSaveDir() / "SpoutLibrary.dll";
     }
 
-    // Try loading from system PATH as fallback
+    // Try loading from the exact path first
     m_dll = LoadLibraryA(dllPath.string().c_str());
     if (!m_dll) {
         // Fallback: try system PATH (if Spout2 is installed system-wide)
@@ -32,7 +32,8 @@ bool SpoutSenderWrap::loadDll() {
     }
 
     if (!m_dll) {
-        log::error("Trakines: Failed to load SpoutLibrary.dll from {}", dllPath.string());
+        log::error("Trakines: Failed to load SpoutLibrary.dll from {} (err={})",
+                   dllPath.string(), GetLastError());
         return false;
     }
 
@@ -63,7 +64,16 @@ bool SpoutSenderWrap::create(const char* name, unsigned int width, unsigned int 
 
     m_spout->SetSenderName(name);
     m_initialized = true;
-    log::info("Trakines: Spout2 sender created: \"{}\" ({}x{})", name, width, height);
+
+    // Check if the Spout sender is properly initialized
+    bool spoutInit = m_spout->IsInitialized();
+    log::info("Trakines: Spout2 sender created: \"{}\" ({}x{}, initialized={})",
+              name, width, height, spoutInit);
+
+    if (!spoutInit) {
+        log::warn("Trakines: Spout2 not yet initialized — will initialize on first SendTexture");
+    }
+
     return true;
 #else
     return false;
@@ -73,8 +83,17 @@ bool SpoutSenderWrap::create(const char* name, unsigned int width, unsigned int 
 bool SpoutSenderWrap::sendTexture(unsigned int texID, unsigned int texTarget,
                                    unsigned int width, unsigned int height) {
 #ifdef TRAKINES_SPOUT_ENABLED
-    if (!m_spout || !m_initialized) return false;
-    return m_spout->SendTexture(texID, texTarget, width, height, true, 0);
+    if (!m_spout || !m_initialized) {
+        if (!m_spout) log::warn("Trakines: sendTexture — m_spout is null");
+        if (!m_initialized) log::warn("Trakines: sendTexture — not initialized");
+        return false;
+    }
+    bool result = m_spout->SendTexture(texID, texTarget, width, height, true, 0);
+    if (!result) {
+        // Try with HostFBO = 0 and bInvert = false as fallback
+        result = m_spout->SendTexture(texID, texTarget, width, height, false, 0);
+    }
+    return result;
 #else
     return false;
 #endif

@@ -41,6 +41,7 @@ bool MirrorRenderer::createFBO() {
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    log::info("Trakines: FBO created ({}x{}, tex={}, fbo={})", m_width, m_height, m_texture, m_fbo);
     return true;
 #else
     return false;
@@ -77,6 +78,7 @@ void MirrorRenderer::init(unsigned int width, unsigned int height, const char* s
 
     m_ready = true;
     m_accumulator = 0.0f;
+    m_frameCount = 0;
     log::info("Trakines: Mirror renderer initialized ({}x{}, Spout name: {})",
               m_width, m_height, spoutName);
 }
@@ -85,20 +87,20 @@ void MirrorRenderer::renderAndSend() {
 #ifdef TRAKINES_SPOUT_ENABLED
     if (!m_ready) return;
 
-    // Save current FBO binding and viewport
+    // ── Save current GL state ──────────────────────────────
     GLint oldFbo;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &oldFbo);
     GLint oldViewport[4];
     glGetIntegerv(GL_VIEWPORT, oldViewport);
 
-    // Temporarily disable layout mode so the re-render shows the normal level
+    // ── Temporarily disable layout mode ───────────────────
     bool wasLayout = false;
     if (m_layoutModeFlag && *m_layoutModeFlag) {
         wasLayout = true;
         *m_layoutModeFlag = false;
     }
 
-    // Bind our FBO
+    // ── Bind our FBO and set viewport ─────────────────────
     glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
     glViewport(0, 0, m_width, m_height);
 
@@ -106,7 +108,7 @@ void MirrorRenderer::renderAndSend() {
     glClearColor(0.f, 0.f, 0.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    // Re-render the current scene into our FBO
+    // ── Re-render the current scene into our FBO ──────────
     // The scene is the same one that was just drawn to screen,
     // but now without layout mode applied.
     auto scene = CCDirector::get()->getRunningScene();
@@ -114,37 +116,46 @@ void MirrorRenderer::renderAndSend() {
         scene->visit();
     }
 
-    // Restore layout mode flag
+    // ── Restore layout mode flag ──────────────────────────
     if (wasLayout && m_layoutModeFlag) {
         *m_layoutModeFlag = true;
     }
 
-    // Restore old FBO and viewport
+    // ── Restore old FBO and viewport ──────────────────────
     glBindFramebuffer(GL_FRAMEBUFFER, oldFbo);
     glViewport(oldViewport[0], oldViewport[1], oldViewport[2], oldViewport[3]);
 
-    // Send the FBO texture to Spout2 (GPU-to-GPU)
-    // The texture is already on the GPU, Spout2 shares it via GL/DX interop
-    m_spout.sendTexture(m_texture, GL_TEXTURE_2D, m_width, m_height);
+    // ── Send the FBO texture to Spout2 ────────────────────
+    bool sent = m_spout.sendTexture(m_texture, GL_TEXTURE_2D, m_width, m_height);
+
+    m_frameCount++;
+    if (m_frameCount <= 3 || m_frameCount % 300 == 0) {
+        log::info("Trakines: Frame {} sent to Spout2: {} (tex={}, fbo={})",
+                  m_frameCount, sent ? "OK" : "FAILED", m_texture, m_fbo);
+    }
+    if (!sent && m_frameCount <= 10) {
+        log::warn("Trakines: SendTexture failed on frame {}", m_frameCount);
+    }
 #endif
 }
 
-void MirrorRenderer::update(float dt) {
-    if (!m_ready) return;
+bool MirrorRenderer::shouldRender(float dt) {
+    if (!m_ready) return false;
 
-    // Throttle mirror render to target FPS
     m_accumulator += dt;
     float frameInterval = 1.0f / static_cast<float>(m_fps);
 
     if (m_accumulator >= frameInterval) {
         m_accumulator -= frameInterval;
-        renderAndSend();
+        return true;
     }
+    return false;
 }
 
 void MirrorRenderer::cleanup() {
     m_spout.release();
     destroyFBO();
     m_ready = false;
+    m_frameCount = 0;
     log::info("Trakines: Mirror renderer cleaned up");
 }

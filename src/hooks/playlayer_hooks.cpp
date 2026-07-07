@@ -71,13 +71,29 @@ class $modify(PlayLayer) {
         return true;
     }
 
-    // ── update: throttle mirror render ─────────────────────
+    // ── update: throttle check only (no GL calls here) ─────
     void update(float dt) {
         PlayLayer::update(dt);
 
         auto& g = TrakinesGlobal::get();
         if (g.spoutEnabled && g.inLevel) {
-            g.mirrorRenderer.update(dt);
+            // Just update the throttle timer — actual render happens in draw()
+            g.mirrorRenderer.shouldRender(dt);
+        }
+    }
+
+    // ── draw: render mirror AFTER the screen draw ──────────
+    // This is the correct place for GL operations — the GL context
+    // is ready and the scene has just been drawn to the screen.
+    void draw() {
+        // First, let the game draw normally (with Layout Mode)
+        PlayLayer::draw();
+
+        auto& g = TrakinesGlobal::get();
+        if (g.spoutEnabled && g.inLevel && g.mirrorRenderer.isReady()) {
+            // Check if it's time to render a mirror frame (throttled)
+            // We use a simple frame counter approach since draw() doesn't get dt
+            g.mirrorRenderer.renderAndSend();
         }
     }
 

@@ -55,7 +55,7 @@ typedef unsigned int GLenum;
 #define GL_BGRA_EXT 0x80E1
 #endif
 
-// #define SPOUTLIBRARY_EXPORTS  // disabled — we import, not export // defined for this DLL. The application imports rather than exports
+// SPOUTLIBRARY_EXPORTS is intentionally NOT defined here — we import the DLL
 
 #ifdef SPOUTLIBRARY_EXPORTS
 #define SPOUTAPI __declspec(dllexport)

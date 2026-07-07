@@ -15,9 +15,9 @@ using namespace geode::prelude;
 // Renders the game scene WITHOUT Layout Mode into an FBO,
 // then sends the FBO texture to Spout2 for OBS capture.
 //
-// Approach (Variant A): After PlayLayer::draw() renders the
-// layout-mode scene to the screen, we re-render the same scene
-// into our FBO with layout mode temporarily disabled.
+// IMPORTANT: renderAndSend() must be called from the DRAW phase
+// (after PlayLayer::draw()), NOT from update(). The GL context
+// is only ready for rendering during the draw phase.
 class MirrorRenderer {
 public:
     MirrorRenderer();
@@ -27,11 +27,11 @@ public:
     void init(unsigned int width, unsigned int height, const char* spoutName);
 
     // Render the current game scene (without layout mode) into FBO and send to Spout2
-    // Called after PlayLayer::draw() or after any CCScene draw
+    // MUST be called from the draw phase (after PlayLayer::draw())
     void renderAndSend();
 
-    // Update throttle timer (call every frame)
-    void update(float dt);
+    // Throttle check — returns true if it's time to render a mirror frame
+    bool shouldRender(float dt);
 
     // Cleanup — called when exiting a level
     void cleanup();
@@ -59,6 +59,7 @@ private:
 
     // State
     bool m_ready = false;
+    int m_frameCount = 0;  // for debug logging
 
     // Pointer to the global layout mode flag
     bool* m_layoutModeFlag = nullptr;
