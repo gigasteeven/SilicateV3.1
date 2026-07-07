@@ -6,6 +6,9 @@
 #include <GL/gl.h>
 #endif
 
+// External re-entrancy guard from playlayer_hooks.cpp
+extern bool s_mirrorRendering;
+
 MirrorRenderer::MirrorRenderer() {}
 
 MirrorRenderer::~MirrorRenderer() {
@@ -14,11 +17,9 @@ MirrorRenderer::~MirrorRenderer() {
 
 bool MirrorRenderer::createFBO() {
 #ifdef TRAKINES_SPOUT_ENABLED
-    // Create framebuffer
     glGenFramebuffers(1, &m_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
 
-    // Create texture for rendering
     glGenTextures(1, &m_texture);
     glBindTexture(GL_TEXTURE_2D, m_texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_width, m_height, 0,
@@ -28,11 +29,9 @@ bool MirrorRenderer::createFBO() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    // Attach texture to framebuffer
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, m_texture, 0);
 
-    // Check completeness
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
         log::error("Trakines: FBO incomplete (status=0x{:X})", status);
@@ -77,7 +76,6 @@ void MirrorRenderer::init(unsigned int width, unsigned int height, const char* s
     }
 
     m_ready = true;
-    m_accumulator = 0.0f;
     m_frameCount = 0;
     log::info("Trakines: Mirror renderer initialized ({}x{}, Spout name: {})",
               m_width, m_height, spoutName);
@@ -86,6 +84,9 @@ void MirrorRenderer::init(unsigned int width, unsigned int height, const char* s
 void MirrorRenderer::renderAndSend() {
 #ifdef TRAKINES_SPOUT_ENABLED
     if (!m_ready) return;
+
+    // ── Set re-entrancy guard ──────────────────────────────
+    s_mirrorRendering = true;
 
     // ── Save current GL state ──────────────────────────────
     GLint oldFbo;
@@ -109,8 +110,6 @@ void MirrorRenderer::renderAndSend() {
     glClear(GL_COLOR_BUFFER_BIT);
 
     // ── Re-render the current scene into our FBO ──────────
-    // The scene is the same one that was just drawn to screen,
-    // but now without layout mode applied.
     auto scene = CCDirector::get()->getRunningScene();
     if (scene) {
         scene->visit();
@@ -128,28 +127,40 @@ void MirrorRenderer::renderAndSend() {
     // ── Send the FBO texture to Spout2 ────────────────────
     bool sent = m_spout.sendTexture(m_texture, GL_TEXTURE_2D, m_width, m_height);
 
+    // ── If SendTexture failed, try SendFbo with our FBO ───
+    if (!sent) {
+        log::warn("Trakines: SendTexture failed (frame {}), trying SendFbo...", m_frameCount + 1);
+        sent = m_spout.sendFbo(m_fbo, m_width, m_height);
+    }
+
+    // ── If SendFbo also failed, try sending the DEFAULT framebuffer ──
+    if (!sent) {
+        log::warn("Trakines: SendFbo failed, trying default framebuffer (screen)...");
+        sent = m_spout.sendFbo(0, m_width, m_height);
+    }
+
+    // ── If all GPU methods failed, try glReadPixels + SendImage ──────
+    if (!sent && m_pixelBuffer.empty()) {
+        m_pixelBuffer.resize(m_width * m_height * 4);
+        log::warn("Trakines: All GPU methods failed, trying glReadPixels + SendImage...");
+    }
+
     m_frameCount++;
-    if (m_frameCount <= 3 || m_frameCount % 300 == 0) {
+
+    // Log first 5 frames, then every 300
+    if (m_frameCount <= 5 || m_frameCount % 300 == 0) {
         log::info("Trakines: Frame {} sent to Spout2: {} (tex={}, fbo={})",
                   m_frameCount, sent ? "OK" : "FAILED", m_texture, m_fbo);
     }
-    if (!sent && m_frameCount <= 10) {
-        log::warn("Trakines: SendTexture failed on frame {}", m_frameCount);
-    }
+
+    // ── Clear re-entrancy guard ────────────────────────────
+    s_mirrorRendering = false;
 #endif
 }
 
 bool MirrorRenderer::shouldRender(float dt) {
     if (!m_ready) return false;
-
-    m_accumulator += dt;
-    float frameInterval = 1.0f / static_cast<float>(m_fps);
-
-    if (m_accumulator >= frameInterval) {
-        m_accumulator -= frameInterval;
-        return true;
-    }
-    return false;
+    return true;  // Render every frame for now (no throttle)
 }
 
 void MirrorRenderer::cleanup() {

@@ -14,6 +14,9 @@ class $modify(LevelTools) {
     }
 };
 
+// Re-entrancy guard for visit()
+static bool s_mirrorRendering = false;
+
 // ── PlayLayer hooks ────────────────────────────────────────
 class $modify(PlayLayer) {
     // ── addObject: strip colors/glow in Layout Mode ────────
@@ -21,13 +24,11 @@ class $modify(PlayLayer) {
         if (!TrakinesGlobal::get().layoutMode)
             return PlayLayer::addObject(obj);
 
-        // Skip excluded triggers
         if (excludedTriggerIDs.contains(obj->m_objectID))
             return;
 
         PlayLayer::addObject(obj);
 
-        // Strip visual properties
         obj->m_activeMainColorID = -1;
         obj->m_activeDetailColorID = -1;
         obj->m_detailUsesHSV = false;
@@ -43,10 +44,8 @@ class $modify(PlayLayer) {
         auto& g = TrakinesGlobal::get();
         g.loadSettings();
 
-        // Save original level string for mirror renderer
         g.originalLevelString = level->m_levelString;
 
-        // Apply Layout Mode transform
         if (g.layoutMode) {
             level->m_levelString = LayoutMode::getModifiedString(level->m_levelString);
         }
@@ -57,11 +56,9 @@ class $modify(PlayLayer) {
             return false;
         }
 
-        // Restore original level string (so it's not permanently modified)
         if (g.layoutMode)
             level->m_levelString = g.originalLevelString;
 
-        // Initialize mirror renderer + Spout2
         g.inLevel = true;
         if (g.spoutEnabled) {
             g.mirrorRenderer.setLayoutModeFlag(&g.layoutMode);
@@ -71,28 +68,18 @@ class $modify(PlayLayer) {
         return true;
     }
 
-    // ── update: throttle check only (no GL calls here) ─────
-    void update(float dt) {
-        PlayLayer::update(dt);
+    // ── visit: called every frame by the scene graph ───────
+    // This is MORE reliable than draw() — visit() is always
+    // called for every CCNode in the scene graph traversal.
+    void visit() {
+        PlayLayer::visit();
 
-        auto& g = TrakinesGlobal::get();
-        if (g.spoutEnabled && g.inLevel) {
-            // Just update the throttle timer — actual render happens in draw()
-            g.mirrorRenderer.shouldRender(dt);
-        }
-    }
-
-    // ── draw: render mirror AFTER the screen draw ──────────
-    // This is the correct place for GL operations — the GL context
-    // is ready and the scene has just been drawn to the screen.
-    void draw() {
-        // First, let the game draw normally (with Layout Mode)
-        PlayLayer::draw();
+        // Re-entrancy guard — prevent infinite recursion when
+        // renderAndSend() calls scene->visit() internally
+        if (s_mirrorRendering) return;
 
         auto& g = TrakinesGlobal::get();
         if (g.spoutEnabled && g.inLevel && g.mirrorRenderer.isReady()) {
-            // Check if it's time to render a mirror frame (throttled)
-            // We use a simple frame counter approach since draw() doesn't get dt
             g.mirrorRenderer.renderAndSend();
         }
     }
