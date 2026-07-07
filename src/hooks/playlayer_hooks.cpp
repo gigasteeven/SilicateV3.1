@@ -14,6 +14,8 @@ class $modify(LevelTools) {
 };
 
 bool s_mirrorRendering = false;
+static int s_updateCallCount = 0;
+static int s_drawCallCount = 0;
 
 class $modify(PlayLayer) {
     void addObject(GameObject* obj) {
@@ -60,18 +62,43 @@ class $modify(PlayLayer) {
             g.mirrorRenderer.init(g.mirrorWidth, g.mirrorHeight, g.spoutName.c_str());
         }
 
+        log::info("Trakines: PlayLayer::init done — inLevel={}, spoutEnabled={}, mirrorReady={}",
+                  g.inLevel, g.spoutEnabled, g.mirrorRenderer.isReady());
+
         return true;
     }
 
-    // ── update: THIS HOOK DEFINITELY WORKS (Layout Mode uses it) ──
-    // Call renderAndSend() from here. The GL context is valid during
-    // the game loop. We render the scene as-is (previous frame state)
-    // which is fine — 1 frame lag at 60fps = 16ms, imperceptible.
     void update(float dt) {
         PlayLayer::update(dt);
 
         auto& g = TrakinesGlobal::get();
+
+        // Aggressive logging for first 5 update calls
+        s_updateCallCount++;
+        if (s_updateCallCount <= 5) {
+            log::info("Trakines: update() #{} — spoutEnabled={}, inLevel={}, mirrorReady={}",
+                      s_updateCallCount, g.spoutEnabled, g.inLevel, g.mirrorRenderer.isReady());
+        }
+
         if (g.spoutEnabled && g.inLevel && g.mirrorRenderer.isReady()) {
+            g.mirrorRenderer.renderAndSend();
+        }
+    }
+
+    // Also hook draw() as a backup — log if it's called
+    void draw() {
+        PlayLayer::draw();
+
+        auto& g = TrakinesGlobal::get();
+
+        s_drawCallCount++;
+        if (s_drawCallCount <= 5) {
+            log::info("Trakines: draw() #{} — spoutEnabled={}, inLevel={}, mirrorReady={}",
+                      s_drawCallCount, g.spoutEnabled, g.inLevel, g.mirrorRenderer.isReady());
+        }
+
+        // Also try rendering from draw() as backup
+        if (g.spoutEnabled && g.inLevel && g.mirrorRenderer.isReady() && !s_mirrorRendering) {
             g.mirrorRenderer.renderAndSend();
         }
     }
@@ -80,9 +107,16 @@ class $modify(PlayLayer) {
         PlayLayer::onExit();
 
         auto& g = TrakinesGlobal::get();
+        log::info("Trakines: onExit() — inLevel was {}, updateCalls={}, drawCalls={}",
+                  g.inLevel, s_updateCallCount, s_drawCallCount);
+
         if (g.inLevel) {
             g.inLevel = false;
             g.mirrorRenderer.cleanup();
         }
+
+        // Reset counters
+        s_updateCallCount = 0;
+        s_drawCallCount = 0;
     }
 };
