@@ -2,8 +2,8 @@
 
 #include <Geode/Geode.hpp>
 #include <string>
-#include "../layout/layout_mode.hpp"
-#include "../mirror/mirror_renderer.hpp"
+#include "layout/layout_mode.hpp"
+#include "mirror/mirror_renderer.hpp"
 
 using namespace geode::prelude;
 
