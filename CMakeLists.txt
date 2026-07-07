@@ -58,7 +58,7 @@ if (WIN32)
         version
     )
 
-    target_compile_definitions(${PROJECT_NAME}
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
         TRAKINES_SPOUT_ENABLED
         SPOUT_BUILD_DLL
     )
