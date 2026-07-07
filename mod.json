@@ -1,29 +1,56 @@
 {
-	"geode": "5.7.1",
-	"gd": {
-		"win": "2.2081"
-	},
-	"version": "v1.0.0",
-	"id": "gigasteeven.trakines",
-	"name": "Trakines",
-	"developer": "gigasteeven",
-	"description": "Layout mode for player + full-decor Spout2 output for OBS. Play with clean silhouettes while your stream shows the decorated level.",
-	"settings": {
-		"layout_mode": {
-			"type": "bool",
-			"name": "Layout Mode",
-			"description": "Blue background + white silhouettes during gameplay. Press U to toggle.",
-			"default": true
-		},
-		"spout_enabled": {
-			"type": "bool",
-			"name": "Spout2 Output",
-			"description": "Send full-decor frames to OBS via Spout2 (sender name: Trakines).",
-			"default": true
-		}
-	},
-	"tags": ["gameplay", "interface", "enhancement"],
-	"resources": {
-		"sprites": []
-	}
+  "geode": "5.7.1",
+  "gd": {
+    "win": "2.2081"
+  },
+  "version": "v1.0.0",
+  "id": "kaiser.trakines",
+  "name": "Trakines",
+  "developer": "kaiser wilgeim",
+  "description": "Play with Layout Mode while OBS shows the normal render via Spout2",
+  "settings": {
+    "enable_layout_mode": {
+      "type": "bool",
+      "name": "Layout Mode",
+      "description": "Enables Layout Mode (simplified hitboxes, no deco) for gameplay",
+      "default": true
+    },
+    "enable_spout_output": {
+      "type": "bool",
+      "name": "Spout2 Output",
+      "description": "Sends the normal (non-layout) render to OBS via Spout2",
+      "default": true
+    },
+    "spout_sender_name": {
+      "type": "string",
+      "name": "Spout Sender Name",
+      "description": "Name of the Spout2 sender that OBS will capture",
+      "default": "Trakines"
+    },
+    "mirror_resolution_w": {
+      "type": "int",
+      "name": "Mirror Render Width",
+      "description": "Resolution width for the Spout2 mirror render",
+      "default": 1920,
+      "min": 640,
+      "max": 3840
+    },
+    "mirror_resolution_h": {
+      "type": "int",
+      "name": "Mirror Render Height",
+      "description": "Resolution height for the Spout2 mirror render",
+      "default": 1080,
+      "min": 360,
+      "max": 2160
+    },
+    "mirror_fps": {
+      "type": "int",
+      "name": "Mirror Render FPS",
+      "description": "Target FPS for the Spout2 mirror render (throttled to save GPU)",
+      "default": 60,
+      "min": 30,
+      "max": 240
+    }
+  },
+  "tags": ["gameplay", "utility"]
 }

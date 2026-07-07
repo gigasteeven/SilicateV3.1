@@ -1,37 +1,15 @@
-# Geode build artifacts
+# Build
 build/
-.geode-cache/
+cmake-build-*/
+*.geode
+!libs/**/*.lib
 
 # IDE
 .vs/
 .vscode/
 .idea/
 *.user
-*.suo
-*.sln
-*.vcxproj*
-CMakeSettings.json
-
-# CMake
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-Makefile
-compile_commands.json
 
 # OS
-.DS_Store
 Thumbs.db
-desktop.ini
-
-# Binaries
-*.dll
-*.lib
-*.exp
-*.pdb
-*.geode
-*.obj
-*.o
-
-# FetchContent downloads
-_deps/
+.DS_Store

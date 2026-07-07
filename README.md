@@ -1,36 +1,46 @@
 # Trakines
 
-A Geometry Dash 2.2081 mod (Geode SDK 5.7.1) that provides a dual-output rendering pipeline:
+A Geode mod for Geometry Dash 2.2081 that lets you play with **Layout Mode** while OBS captures the **normal (non-layout) render** via **Spout2**.
 
-- **Player sees**: Layout mode — blue background, white silhouettes (clean gameplay view)
-- **OBS sees**: Full decorated level via Spout2 texture sharing
+## How it works
 
-## Features
+- **Layout Mode** (ported from XDBotFork): Simplifies the level by removing decorative objects, stripping colors, and keeping only solid hitboxes. The player sees a clean layout.
+- **Mirror Renderer**: Re-renders the same scene **without** Layout Mode into an FBO, then sends the texture to Spout2 via GPU-to-GPU sharing (no CPU copy).
+- **Spout2**: OBS captures the Spout2 sender as a video source. The viewer sees the full normal level with all decorations and colors.
 
-- **Layout Mode** (from XDBot): Blue background + white object silhouettes for clean gameplay
-- **Spout2 Output**: Full-decor frames sent to OBS via zero-copy GPU texture sharing
-- **Menu/Pause/Editor**: Mod inactive — Spout2 mirrors the screen 1:1
-- **Hotkey**: Press `U` to toggle layout mode on/off
-- **GPU Optimized**: Spout2 uses NVIDIA DX/GL interop for zero-copy texture sharing
+## Setup
 
-## Setup for OBS
+### Prerequisites
+- Geometry Dash 2.2081 (Windows)
+- Geode Loader 5.7.1+
+- OBS Studio with [Spout2 plugin](https://github.com/Off-World-Live/obs-spout2-plugin)
 
-1. Install the [Spout2 OBS Plugin](https://github.com/Off-World-Live/obs-spout2-plugin)
-2. Add a **Spout2 Capture** source in OBS
-3. Select sender name: **Trakines**
-4. Play GD with the mod enabled — OBS receives the full decorated level
+### Installation
+1. Download `kaiser.trakines.geode` from [Releases](../../releases)
+2. Place it in your `geode/mods/` folder
+3. Launch Geometry Dash
+
+### OBS Configuration
+1. Install the Spout2 plugin for OBS
+2. Add a **Spout2 Capture** source to your scene
+3. Select the sender name **"Trakines"** (or whatever you set in mod settings)
+
+## Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Layout Mode | ON | Enables Layout Mode for gameplay |
+| Spout2 Output | ON | Sends normal render to OBS via Spout2 |
+| Spout Sender Name | "Trakines" | Name OBS will look for |
+| Mirror Resolution | 1920x1080 | Resolution of the Spout2 output |
+| Mirror FPS | 60 | Throttled render FPS for Spout2 output |
 
 ## Building
 
-```bash
-# Requires Geode CLI installed
-geode build
-```
-
-Or push to GitHub — the Actions workflow builds automatically.
+The mod builds via GitHub Actions using `geode-sdk/build-geode-mod`. Spout2 SDK is statically linked (no external DLLs needed).
 
 ## Credits
 
-- Layout mode logic adapted from [XDBot](https://github.com/NakoMellia/XDBotFork) by Zilko & Camellia
-- [Spout2](https://github.com/leadedge/Spout2) by Lynn Jarvis
-- Built with [Geode SDK](https://geode-sdk.org/)
+- Layout Mode logic: [XDBotFork](https://github.com/NakoMellia/XDBotFork) by Zilko & Camellia
+- Spout2 SDK: [leadedge/Spout2](https://github.com/leadedge/Spout2) by Lynn Jarvis
+- Mod developer: kaiser wilgeim
