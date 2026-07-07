@@ -1,14 +1,17 @@
 #include "trakines_menu.hpp"
 #include "../global.hpp"
 
-bool TrakinesMenu::setup() {
+bool TrakinesMenu::init(float width, float height) {
+    if (!geode::Popup::init(width, height))
+        return false;
+
     setTitle("Trakines");
 
     auto& g = TrakinesGlobal::get();
 
     auto label = CCLabelBMFont::create("Trakines Settings", "goldFont.fnt");
-    label->setPosition(m_mainLayer->getContentSize() / 2);
-    m_mainLayer->addChild(label);
+    label->setPosition(m_size.width / 2, m_size.height / 2);
+    this->addChild(label);
 
     // Status info
     std::string status;
@@ -18,19 +21,13 @@ bool TrakinesMenu::setup() {
     status += " @" + std::to_string(g.mirrorFps) + " FPS";
 
     auto statusLabel = CCLabelBMFont::create(status.c_str(), "chatFont.fnt");
-    statusLabel->setPosition({m_mainLayer->getContentSize().width / 2,
-                              m_mainLayer->getContentSize().height / 2 - 40.f});
+    statusLabel->setPosition({m_size.width / 2, m_size.height / 2 - 40.f});
     statusLabel->setScale(0.8f);
-    m_mainLayer->addChild(statusLabel);
-
-    // Close button
-    auto closeButton = CCMenuItemSpriteExtra::create(
-        ButtonSprite::create("OK"),
-        this,
-        menu_selector(TrakinesMenu::onClose)
-    );
-    closeButton->setPosition({m_mainLayer->getContentSize().width / 2, 30.f});
-    m_buttonMenu->addChild(closeButton);
+    this->addChild(statusLabel);
 
     return true;
+}
+
+void TrakinesMenu::onClose(CCObject* sender) {
+    geode::Popup::onClose(sender);
 }
